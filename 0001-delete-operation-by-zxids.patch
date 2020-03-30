@@ -1,0 +1,180 @@
+From ac32cd6ee0981af5187def31241f27979f5b4751 Mon Sep 17 00:00:00 2001
+From: Luo Hai <lhasdfr@gmail.com>
+Date: Mon, 30 Mar 2020 23:33:17 +0800
+Subject: [PATCH] delete operation by zxids
+
+---
+ .../server/persistence/TxnLogToolkit.java     | 94 +++++++++++++------
+ 1 file changed, 67 insertions(+), 27 deletions(-)
+
+diff --git a/zookeeper-server/src/main/java/org/apache/zookeeper/server/persistence/TxnLogToolkit.java b/zookeeper-server/src/main/java/org/apache/zookeeper/server/persistence/TxnLogToolkit.java
+index e47d55b..43eda34 100644
+--- a/zookeeper-server/src/main/java/org/apache/zookeeper/server/persistence/TxnLogToolkit.java
++++ b/zookeeper-server/src/main/java/org/apache/zookeeper/server/persistence/TxnLogToolkit.java
+@@ -44,7 +44,9 @@
+ import java.io.FileOutputStream;
+ import java.io.IOException;
+ import java.text.DateFormat;
++import java.util.ArrayList;
+ import java.util.Date;
++import java.util.List;
+ import java.util.Scanner;
+ import java.util.zip.Adler32;
+ import java.util.zip.Checksum;
+@@ -84,6 +86,7 @@ Options getOptions() {
+     private File txnLogFile;
+     private boolean recoveryMode = false;
+     private boolean verbose = false;
++    private List<String> skippedZxids = null;
+     private FileInputStream txnFis;
+     private BinaryInputArchive logStream;
+ 
+@@ -110,12 +113,17 @@ public static void main(String[] args) throws Exception {
+             System.exit(e.getExitCode());
+         }
+     }
+-
+     public TxnLogToolkit(boolean recoveryMode, boolean verbose, String txnLogFileName, boolean force)
+             throws FileNotFoundException, TxnLogToolkitException {
++        this(recoveryMode, verbose, txnLogFileName, force,new ArrayList<>());
++    }
++
++    public TxnLogToolkit(boolean recoveryMode, boolean verbose, String txnLogFileName, boolean force, List<String> skippedZxids)
++            throws FileNotFoundException, TxnLogToolkitException {
+         this.recoveryMode = recoveryMode;
+         this.verbose = verbose;
+         this.force = force;
++        this.skippedZxids =skippedZxids;
+         txnLogFile = new File(txnLogFileName);
+         if (!txnLogFile.exists() || !txnLogFile.canRead()) {
+             throw new TxnLogToolkitException(1, "File doesn't exist or not readable: %s", txnLogFile);
+@@ -144,7 +152,7 @@ public void dump(Scanner scanner) throws Exception {
+         System.out.println("ZooKeeper Transactional Log File with dbid "
+                 + fhdr.getDbid() + " txnlog format version "
+                 + fhdr.getVersion());
+-
++        System.out.println("Skipped zxids: " + skippedZxids);
+         if (recoveryMode) {
+             fhdr.serialize(recoveryOa, "fileheader");
+             recoveryFos.flush();
+@@ -193,6 +201,11 @@ public void dump(Scanner scanner) throws Exception {
+             if (logStream.readByte("EOR") != 'B') {
+                 throw new TxnLogToolkitException(1, "Last transaction was partial.");
+             }
++//            System.out.println("current zxid: " + getZxid(bytes));
++            if (this.skippedZxids.contains(getZxid(bytes))){
++                 printTxn(bytes,"Skipped Record");
++                 continue;
++            }
+             if (recoveryMode) {
+                 filePadding.padFile(recoveryFos.getChannel());
+                 recoveryOa.writeLong(crcValue, "crcvalue");
+@@ -222,6 +235,16 @@ private void printTxn(byte[] bytes) throws IOException {
+         printTxn(bytes, "");
+     }
+ 
++    /**
++     *
++     * @param bytes
++     * @return
++     */
++    private static String getZxid(byte[] bytes) throws IOException{
++        TxnHeader hdr = new TxnHeader();
++        Record txn = SerializeUtils.deserializeTxn(bytes, hdr);
++        return Long.toHexString(hdr.getZxid());
++    }
+     private void printTxn(byte[] bytes, String prefix) throws IOException {
+         TxnHeader hdr = new TxnHeader();
+         Record txn = SerializeUtils.deserializeTxn(bytes, hdr);
+@@ -250,31 +273,35 @@ private void printTxn(byte[] bytes, String prefix) throws IOException {
+      */
+     private static String getDataStrFromTxn(Record txn) {
+         StringBuilder txnData = new StringBuilder();
+-        if (txn == null) {
+-            return txnData.toString();
+-        }
+-        if (txn instanceof CreateTxn) {
+-            CreateTxn createTxn = ((CreateTxn) txn);
+-            txnData.append(createTxn.getPath() + "," + new String(createTxn.getData()))
+-                   .append("," + createTxn.getAcl() + "," + createTxn.getEphemeral())
+-                   .append("," + createTxn.getParentCVersion());
+-        } else if (txn instanceof SetDataTxn) {
+-            SetDataTxn setDataTxn = ((SetDataTxn) txn);
+-            txnData.append(setDataTxn.getPath() + "," + new String(setDataTxn.getData()))
+-                   .append("," + setDataTxn.getVersion());
+-        } else if (txn instanceof CreateContainerTxn) {
+-            CreateContainerTxn createContainerTxn = ((CreateContainerTxn) txn);
+-            txnData.append(createContainerTxn.getPath() + "," + new String(createContainerTxn.getData()))
+-                   .append("," + createContainerTxn.getAcl() + "," + createContainerTxn.getParentCVersion());
+-        } else if (txn instanceof CreateTTLTxn) {
+-            CreateTTLTxn createTTLTxn = ((CreateTTLTxn) txn);
+-            txnData.append(createTTLTxn.getPath() + "," + new String(createTTLTxn.getData()))
+-                   .append("," + createTTLTxn.getAcl() + "," + createTTLTxn.getParentCVersion())
+-                   .append("," + createTTLTxn.getTtl());
+-        } else {
+-            txnData.append(txn.toString());
+-        }
++        try{
+ 
++            if (txn == null) {
++                return txnData.toString();
++            }
++            if (txn instanceof CreateTxn) {
++                CreateTxn createTxn = ((CreateTxn) txn);
++                txnData.append(createTxn.getPath() + "," + new String(createTxn.getData()))
++                        .append("," + createTxn.getAcl() + "," + createTxn.getEphemeral())
++                        .append("," + createTxn.getParentCVersion());
++            } else if (txn instanceof SetDataTxn) {
++                SetDataTxn setDataTxn = ((SetDataTxn) txn);
++                txnData.append(setDataTxn.getPath() + "," + new String(setDataTxn.getData()))
++                        .append("," + setDataTxn.getVersion());
++            } else if (txn instanceof CreateContainerTxn) {
++                CreateContainerTxn createContainerTxn = ((CreateContainerTxn) txn);
++                txnData.append(createContainerTxn.getPath() + "," + new String(createContainerTxn.getData()))
++                        .append("," + createContainerTxn.getAcl() + "," + createContainerTxn.getParentCVersion());
++            } else if (txn instanceof CreateTTLTxn) {
++                CreateTTLTxn createTTLTxn = ((CreateTTLTxn) txn);
++                txnData.append(createTTLTxn.getPath() + "," + new String(createTTLTxn.getData()))
++                        .append("," + createTTLTxn.getAcl() + "," + createTTLTxn.getParentCVersion())
++                        .append("," + createTTLTxn.getTtl());
++            } else {
++                txnData.append(txn.toString());
++            }
++        }catch (Exception e){
++//            e.printStackTrace();
++        }
+         return txnData.toString();
+     }
+     
+@@ -319,6 +346,10 @@ private static TxnLogToolkit parseCommandLine(String[] args) throws TxnLogToolki
+         Option forceOpt = new Option("y", "yes", false, "Non-interactive mode: repair all CRC errors without asking");
+         options.addOption(forceOpt);
+ 
++        Option skip = new Option("s", "skip", true, "zxid list(,)");
++        options.addOption(skip);
++
++
+         try {
+             CommandLine cli = parser.parse(options, args);
+             if (cli.hasOption("help")) {
+@@ -327,7 +358,16 @@ private static TxnLogToolkit parseCommandLine(String[] args) throws TxnLogToolki
+             if (cli.getArgs().length < 1) {
+                 printHelpAndExit(1, options);
+             }
+-            return new TxnLogToolkit(cli.hasOption("recover"), cli.hasOption("verbose"), cli.getArgs()[0], cli.hasOption("yes"));
++            List<String> zXids = new ArrayList<>();
++            if (cli.hasOption("skip")){
++                String rawZxidString = cli.getOptionValue("skip");
++                for (String zXidStr : rawZxidString.split(",")){
++                    zXidStr = zXidStr.trim().toLowerCase();
++
++                    zXids.add(zXidStr.startsWith("0x")? zXidStr.substring(2) : zXidStr);
++                }
++            }
++            return new TxnLogToolkit(cli.hasOption("recover"), cli.hasOption("verbose"), cli.getArgs()[0], cli.hasOption("yes"), zXids);
+         } catch (ParseException e) {
+             throw new TxnLogToolkitParseException(options, 1, e.getMessage());
+         }
+-- 
+2.20.1 (Apple Git-117)
+
