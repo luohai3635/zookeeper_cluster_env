@@ -1,0 +1,4 @@
+server.1=localhost:2171:2191:participant
+server.2=localhost:2172:2192:participant
+server.3=localhost:2173:2193:participant
+version=c00000000
