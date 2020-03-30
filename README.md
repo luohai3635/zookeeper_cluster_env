@@ -1,9 +1,9 @@
-# zookeeper_cluster_env
+# Zookeeper Cluster Env
 方便在mac上运行的zookeeper集群搭建环境，同时提供移除zookeeper中的误操作工具（当前仅在本地测试通过，线上环境使用请进行生产级测试）
 
 ## 参考
-[如何用git命令生成Patch和打Patch](https://www.cnblogs.com/ArsenalfanInECNU/p/8931377.html)
-[zookeeper数据恢复](https://blog.csdn.net/IAmListening/article/details/95197707)
+* [如何用git命令生成Patch和打Patch](https://www.cnblogs.com/ArsenalfanInECNU/p/8931377.html)
+* [zookeeper数据恢复](https://blog.csdn.net/IAmListening/article/details/95197707)
 
 ## 环境
 1. zookeeper:3.5.7
